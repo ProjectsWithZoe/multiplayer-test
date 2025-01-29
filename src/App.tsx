@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { Minus, Plus, LogIn, LogOut } from 'lucide-react';
 import { supabase } from './lib/supabase';
 import toast, { Toaster } from 'react-hot-toast';
+import { RealtimeChannel } from '@supabase/supabase-js';
 
 type Game = {
   id: string;
@@ -20,6 +21,7 @@ function App() {
   const [loading, setLoading] = useState(true);
   const [availableGames, setAvailableGames] = useState<Game[]>([]);
   const [gameCode, setGameCode] = useState('');
+  const [subscription, setSubscription] = useState<RealtimeChannel | null>(null);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
