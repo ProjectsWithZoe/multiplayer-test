@@ -13,6 +13,8 @@ type Game = {
   winner: string | null;
 };
 
+const REALTIME_POSTGRES_CHANGES_LISTEN_EVENT = 'postgres_changes';
+
 function App() {
   const [session, setSession] = useState<any>(null);
   const [email, setEmail] = useState('');
@@ -21,7 +23,6 @@ function App() {
   const [loading, setLoading] = useState(true);
   const [availableGames, setAvailableGames] = useState<Game[]>([]);
   const [gameCode, setGameCode] = useState('');
-  const [subscription, setSubscription] = useState<RealtimeChannel | null>(null);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
@@ -44,6 +45,50 @@ function App() {
     }
   }, [session]);
 
+  useEffect(() => {
+    if (!game?.id || !session?.user?.id) return;
+
+    console.log('Setting up realtime subscription for game:', game.id);
+
+    const channel = supabase.channel('game_updates')
+      .on(
+        'postgres_changes',
+        {
+          event: 'UPDATE',
+          schema: 'public',
+          table: 'games',
+          filter: `id=eq.${game.id}`,
+        },
+        (payload) => {
+          console.log('Received realtime update:', payload);
+          const newGame = payload.new as Game;
+          setGame(newGame);
+        }
+      )
+      .subscribe(async (status) => {
+        console.log('Realtime subscription status:', status);
+        
+        if (status === 'SUBSCRIBED') {
+          // Fetch latest game state when subscription is established
+          const { data } = await supabase
+            .from('games')
+            .select('*')
+            .eq('id', game.id)
+            .single();
+          
+          if (data) {
+            console.log('Initial game state:', data);
+            setGame(data);
+          }
+        }
+      });
+
+    return () => {
+      console.log('Cleaning up realtime subscription');
+      supabase.removeChannel(channel);
+    };
+  }, [game?.id, session?.user?.id]);
+
   const fetchGameState = async () => {
     if (!session?.user?.id) return;
 
@@ -62,7 +107,6 @@ function App() {
 
     if (userGames && userGames.length > 0) {
       setGame(userGames[0]);
-      subscribeToGame(userGames[0].id);
       return;
     }
 
@@ -115,7 +159,6 @@ function App() {
 
     console.log('Created new game:', newGame); // Debug log
     setGame(newGame);
-    subscribeToGame(newGame.id);
   };
 
   const joinGame = async (gameId: string) => {
@@ -142,9 +185,7 @@ function App() {
         players: [...gameCheck.players, session.user.id],
         updated_at: new Date().toISOString()
       })
-      .eq('id', gameId)
-      .select()
-      .single();
+      .eq('id', gameId);
 
     if (error) {
       console.error('Join game error:', error);
@@ -152,42 +193,28 @@ function App() {
       return;
     }
 
-    fetchGameState();
-  };
-
-  const subscribeToGame = (gameId: string) => {
-    const channel = supabase
-      .channel(`game:${gameId}`)
-      .on(
-        'postgres_changes',
-        {
-          event: '*',
-          schema: 'public',
-          table: 'games',
-          filter: `id=eq.${gameId}`,
-        },
-        (payload) => {
-          console.log('Game updated:', payload.new);
-          setGame(payload.new as Game);
-        }
-      )
-      .subscribe();
-
-    return () => {
-      supabase.removeChannel(channel);
-    };
+    await fetchGameState();
   };
 
   const handleMove = async (increment: boolean) => {
-    if (!game || !session) return;
+    if (!game || !session?.user?.id) {
+      console.log('No game or session');
+      return;
+    }
+    
     if (game.current_player !== session.user.id) {
       toast.error("It's not your turn!");
       return;
     }
 
     const newNumber = increment ? game.current_number + 1 : game.current_number - 1;
+    console.log('Attempting move:', { 
+      gameId: game.id,
+      currentNumber: game.current_number,
+      newNumber,
+      increment 
+    });
     
-    // Get next player (cycle through players array)
     const currentPlayerIndex = game.players.indexOf(game.current_player);
     const nextPlayerIndex = (currentPlayerIndex + 1) % game.players.length;
     const nextPlayer = game.players[nextPlayerIndex];
@@ -198,7 +225,7 @@ function App() {
         .update({
           current_number: newNumber,
           current_player: nextPlayer,
-          updated_at: new Date().toISOString(),
+          updated_at: new Date().toISOString()
         })
         .eq('id', game.id)
         .select()
@@ -210,6 +237,9 @@ function App() {
         return;
       }
 
+      console.log('Move successful, server returned:', data);
+      
+      // Optimistically update local state
       if (data) {
         setGame(data);
       }
@@ -294,6 +324,18 @@ function App() {
     setGameCode('');
     fetchGameState();
   };
+
+  // Add this debug effect
+  useEffect(() => {
+    if (game) {
+      console.log('Game state updated:', {
+        id: game.id,
+        number: game.current_number,
+        currentPlayer: game.current_player,
+        players: game.players
+      });
+    }
+  }, [game]);
 
   if (loading) {
     return (
@@ -394,14 +436,14 @@ function App() {
             <div className="flex justify-center space-x-4">
               <button
                 onClick={() => handleMove(false)}
-                disabled={game.current_player !== session.user.id}
+                disabled={!game || game.current_player !== session?.user?.id}
                 className="bg-red-500 text-white p-3 rounded-full hover:bg-red-600 transition-colors disabled:opacity-50"
               >
                 <Minus className="w-6 h-6" />
               </button>
               <button
                 onClick={() => handleMove(true)}
-                disabled={game.current_player !== session.user.id}
+                disabled={!game || game.current_player !== session?.user?.id}
                 className="bg-green-500 text-white p-3 rounded-full hover:bg-green-600 transition-colors disabled:opacity-50"
               >
                 <Plus className="w-6 h-6" />
