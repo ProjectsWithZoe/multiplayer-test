@@ -116,14 +116,27 @@ function App() {
       .select('*')
       .not('game_over', 'is', true)
       .not('players', 'cs', `{${session.user.id}}`)  // Not in games where user is already a player
-      .lt('players', 4);  // Less than 4 players
+      .filter('players', 'cs', '{}')  // Has players array
+      .lt('players', 'length', 4);  // Less than 4 players
 
     if (openGamesError) {
+      console.error('Error fetching open games:', openGamesError);
       toast.error('Error fetching open games');
       return;
     }
 
+    console.log('Available games:', openGames);
     setAvailableGames(openGames || []);
+  };
+
+  const generateGameCode = () => {
+    // Generate a 6-character alphanumeric code
+    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+    let code = '';
+    for (let i = 0; i < 6; i++) {
+      code += chars.charAt(Math.floor(Math.random() * chars.length));
+    }
+    return code;
   };
 
   const createNewGame = async () => {
@@ -132,33 +145,35 @@ function App() {
       return;
     }
 
-    const { data: newGame, error } = await supabase
-      .from('games')
-      .insert([
-        {
-          players: [session.user.id],  // Initialize with current user as first player
-          current_player: session.user.id,
+    const gameCode = generateGameCode();
+    console.log('Generated game code:', gameCode); // Debug log
+
+    try {
+      const { data: newGame, error } = await supabase
+        .from('games')
+        .insert({
+          id: gameCode,
           current_number: 0,
+          current_player: session.user.id,
+          players: [session.user.id],
           game_over: false,
           winner: null
-        },
-      ])
-      .select()
-      .single();
+        })
+        .select()
+        .single();
 
-    if (error) {
+      if (error) {
+        console.error('Create game error:', error);
+        toast.error('Error creating game');
+        return;
+      }
+
+      console.log('Created new game:', newGame);
+      setGame(newGame);
+    } catch (error) {
       console.error('Create game error:', error);
       toast.error('Error creating game');
-      return;
     }
-
-    if (!newGame) {
-      toast.error('Failed to create game');
-      return;
-    }
-
-    console.log('Created new game:', newGame); // Debug log
-    setGame(newGame);
   };
 
   const joinGame = async (gameId: string) => {
@@ -458,7 +473,9 @@ function App() {
 
             <div className="mt-4 text-center">
               <p className="text-sm text-gray-600">Game Code:</p>
-              <p className="font-mono text-sm bg-gray-100 p-2 rounded">{game.id}</p>
+              <p className="font-mono text-lg bg-gray-100 p-2 rounded tracking-wider">
+                {game.id}
+              </p>
             </div>
           </div>
         ) : (
